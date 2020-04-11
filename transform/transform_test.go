@@ -3,13 +3,18 @@ package transform
 // This file defines some helper functions for testing transforms.
 
 import (
+	"flag"
 	"io/ioutil"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
 	"tinygo.org/x/go-llvm"
 )
+
+var update = flag.Bool("update", false, "update transform package tests")
 
 // testTransform runs a transformation pass on an input file (pathPrefix+".ll")
 // and checks whether it matches the expected output (pathPrefix+".out.ll"). The
@@ -31,18 +36,28 @@ func testTransform(t *testing.T, pathPrefix string, transform func(mod llvm.Modu
 	// Perform the transform.
 	transform(mod)
 
-	// Read the expected output IR.
-	out, err := ioutil.ReadFile(pathPrefix + ".out.ll")
-	if err != nil {
-		t.Fatalf("could not read output file %s: %v", pathPrefix+".out.ll", err)
-	}
-
-	// See whether the transform output matches with the expected output IR.
-	expected := string(out)
+	// Get the output from the test and filter some irrelevant lines.
 	actual := mod.String()
-	if !fuzzyEqualIR(expected, actual) {
-		t.Logf("output does not match expected output:\n%s", actual)
-		t.Fail()
+	actual = actual[strings.Index(actual, "\ntarget datalayout = ")+1:]
+
+	if *update {
+		err := ioutil.WriteFile(pathPrefix+".out.ll", []byte(actual), 0666)
+		if err != nil {
+			t.Error("failed to write out new output:", err)
+		}
+	} else {
+		// Read the expected output IR.
+		out, err := ioutil.ReadFile(pathPrefix + ".out.ll")
+		if err != nil {
+			t.Fatalf("could not read output file %s: %v", pathPrefix+".out.ll", err)
+		}
+
+		// See whether the transform output matches with the expected output IR.
+		expected := string(out)
+		if !fuzzyEqualIR(expected, actual) {
+			t.Logf("output does not match expected output:\n%s", actual)
+			t.Fail()
+		}
 	}
 }
 
@@ -69,6 +84,12 @@ func fuzzyEqualIR(s1, s2 string) bool {
 // stripped out.
 func filterIrrelevantIRLines(lines []string) []string {
 	var out []string
+	llvmVersion, err := strconv.Atoi(strings.Split(llvm.Version, ".")[0])
+	if err != nil {
+		// Note: this should never happen and if it does, it will always happen
+		// for a particular build because llvm.Version is a constant.
+		panic(err)
+	}
 	for _, line := range lines {
 		line = strings.Split(line, ";")[0]    // strip out comments/info
 		line = strings.TrimRight(line, "\r ") // drop '\r' on Windows and remove trailing spaces from comments
@@ -77,6 +98,19 @@ func filterIrrelevantIRLines(lines []string) []string {
 		}
 		if strings.HasPrefix(line, "source_filename = ") {
 			continue
+		}
+		if llvmVersion < 10 && strings.HasPrefix(line, "attributes ") {
+			// Ignore attribute groups. These may change between LLVM versions.
+			// Right now test outputs are for LLVM 10.
+			continue
+		}
+		if llvmVersion < 10 && strings.HasPrefix(line, "define ") {
+			// Remove parameter values such as %0 in function definitions. These
+			// were added in LLVM 10 so to get the tests to pass on older
+			// versions, ignore them there (there are other tests that verify
+			// correct behavior).
+			re := regexp.MustCompile(` %[0-9]+(\)|,)`)
+			line = re.ReplaceAllString(line, "$1")
 		}
 		out = append(out, line)
 	}

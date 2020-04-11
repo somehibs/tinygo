@@ -55,13 +55,6 @@ const (
 	TFT_LITE = PA01
 
 	SPEAKER_ENABLE = PA27
-
-	QSPI_SCK    = PB10
-	QSPI_CS     = PB11
-	QSPI_DATA_1 = PA08
-	QSPI_DATA_2 = PA09
-	QSPI_DATA_3 = PA10
-	QSPI_DATA_4 = PA11
 )
 
 const (
@@ -139,4 +132,15 @@ var (
 		Bus:    sam.SERCOM4_SPIM,
 		SERCOM: 4,
 	}
+)
+
+// USB CDC identifiers
+const (
+	usb_STRING_PRODUCT      = "Adafruit pyBadge M4"
+	usb_STRING_MANUFACTURER = "Adafruit"
+)
+
+var (
+	usb_VID uint16 = 0x239A
+	usb_PID uint16 = 0x8033
 )

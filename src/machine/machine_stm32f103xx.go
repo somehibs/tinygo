@@ -6,8 +6,8 @@ package machine
 
 import (
 	"device/stm32"
-	"errors"
 	"runtime/interrupt"
+	"unsafe"
 )
 
 func CPUFrequency() uint32 {
@@ -31,6 +31,21 @@ const (
 	PinOutputModeAltPushPull  PinMode = 8  // Output mode alt. purpose push/pull
 	PinOutputModeAltOpenDrain PinMode = 12 // Output mode alt. purpose open drain
 )
+
+// Configure this pin with the given I/O settings.
+// stm32f1xx uses different technique for setting the GPIO pins than the stm32f407
+func (p Pin) Configure(config PinConfig) {
+	// Configure the GPIO pin.
+	p.enableClock()
+	port := p.getPort()
+	pin := uint8(p) % 16
+	pos := (pin % 8) * 4
+	if pin < 8 {
+		port.CRL.ReplaceBits(uint32(config.Mode), 0xf, pos)
+	} else {
+		port.CRH.ReplaceBits(uint32(config.Mode), 0xf, pos)
+	}
+}
 
 func (p Pin) getPort() *stm32.GPIO_Type {
 	switch p / 16 {
@@ -75,53 +90,30 @@ func (p Pin) enableClock() {
 	}
 }
 
-// Configure this pin with the given configuration.
-func (p Pin) Configure(config PinConfig) {
-	// Configure the GPIO pin.
-	p.enableClock()
-	port := p.getPort()
-	pin := uint8(p) % 16
-	pos := uint8(p) % 8 * 4
-	if pin < 8 {
-		port.CRL.Set((uint32(port.CRL.Get()) &^ (0xf << pos)) | (uint32(config.Mode) << pos))
-	} else {
-		port.CRH.Set((uint32(port.CRH.Get()) &^ (0xf << pos)) | (uint32(config.Mode) << pos))
+// Enable peripheral clock. Expand to include all the desired peripherals
+func enableAltFuncClock(bus unsafe.Pointer) {
+	if bus == unsafe.Pointer(stm32.USART1) {
+		stm32.RCC.APB2ENR.SetBits(stm32.RCC_APB2ENR_USART1EN)
+	} else if bus == unsafe.Pointer(stm32.USART2) {
+		stm32.RCC.APB1ENR.SetBits(stm32.RCC_APB1ENR_USART2EN)
+	} else if bus == unsafe.Pointer(stm32.I2C1) {
+		stm32.RCC.APB1ENR.SetBits(stm32.RCC_APB1ENR_I2C1EN)
+	} else if bus == unsafe.Pointer(stm32.SPI1) {
+		stm32.RCC.APB2ENR.SetBits(stm32.RCC_APB2ENR_SPI1EN)
 	}
 }
 
-// Set the pin to high or low.
-// Warning: only use this on an output pin!
-func (p Pin) Set(high bool) {
-	port := p.getPort()
-	pin := uint8(p) % 16
-	if high {
-		port.BSRR.Set(1 << pin)
-	} else {
-		port.BSRR.Set(1 << (pin + 16))
-	}
-}
+//---------- UART related types and code
 
-// Get returns the current value of a GPIO pin.
-func (p Pin) Get() bool {
-	port := p.getPort()
-	pin := uint8(p) % 16
-	val := port.IDR.Get() & (1 << pin)
-	return (val > 0)
-}
-
-// UART
+// UART representation
 type UART struct {
 	Buffer    *RingBuffer
 	Bus       *stm32.USART_Type
 	Interrupt interrupt.Interrupt
 }
 
-// Configure the UART.
-func (uart UART) Configure(config UARTConfig) {
-	// Default baud rate to 115200.
-	if config.BaudRate == 0 {
-		config.BaudRate = 115200
-	}
+// Configure the TX and RX pins
+func (uart UART) configurePins(config UARTConfig) {
 
 	// pins
 	switch config.TX {
@@ -133,34 +125,16 @@ func (uart UART) Configure(config UARTConfig) {
 		} else if uart.Bus == stm32.USART2 {
 			stm32.AFIO.MAPR.SetBits(stm32.AFIO_MAPR_USART2_REMAP)
 		}
-		UART_ALT_TX_PIN.Configure(PinConfig{Mode: PinOutput50MHz + PinOutputModeAltPushPull})
-		UART_ALT_RX_PIN.Configure(PinConfig{Mode: PinInputModeFloating})
 	default:
 		// use standard TX/RX pins PA9 and PA10
-		UART_TX_PIN.Configure(PinConfig{Mode: PinOutput50MHz + PinOutputModeAltPushPull})
-		UART_RX_PIN.Configure(PinConfig{Mode: PinInputModeFloating})
 	}
-
-	// Enable USART clock
-	if uart.Bus == stm32.USART1 {
-		stm32.RCC.APB2ENR.SetBits(stm32.RCC_APB2ENR_USART1EN)
-	} else if uart.Bus == stm32.USART2 {
-		stm32.RCC.APB1ENR.SetBits(stm32.RCC_APB1ENR_USART2EN)
-	}
-
-	// Set baud rate
-	uart.SetBaudRate(config.BaudRate)
-
-	// Enable USART port
-	uart.Bus.CR1.Set(stm32.USART_CR1_TE | stm32.USART_CR1_RE | stm32.USART_CR1_RXNEIE | stm32.USART_CR1_UE)
-
-	// Enable RX IRQ
-	uart.Interrupt.SetPriority(0xc0)
-	uart.Interrupt.Enable()
+	config.TX.Configure(PinConfig{Mode: PinOutput50MHz + PinOutputModeAltPushPull})
+	config.RX.Configure(PinConfig{Mode: PinInputModeFloating})
 }
 
-// SetBaudRate sets the communication speed for the UART.
-func (uart UART) SetBaudRate(br uint32) {
+// Determine the divisor for USARTs to get the given baudrate
+func (uart UART) getBaudRateDivisor(br uint32) uint32 {
+
 	// Note: PCLK2 (from APB2) used for USART1 and PCLK1 for USART2, 3, 4, 5
 	var divider uint32
 	if uart.Bus == stm32.USART1 {
@@ -170,25 +144,11 @@ func (uart UART) SetBaudRate(br uint32) {
 		// first divide by PCLK1 prescaler (div 2) and then desired baudrate
 		divider = CPUFrequency() / 2 / br
 	}
-	uart.Bus.BRR.Set(divider)
+	return divider
 }
 
-// WriteByte writes a byte of data to the UART.
-func (uart UART) WriteByte(c byte) error {
-	uart.Bus.DR.Set(uint32(c))
+//---------- SPI related types and code
 
-	for !uart.Bus.SR.HasBits(stm32.USART_SR_TXE) {
-	}
-	return nil
-}
-
-// handleInterrupt should be called from the appropriate interrupt handler for
-// this UART instance.
-func (uart *UART) handleInterrupt(interrupt.Interrupt) {
-	uart.Receive(byte((uart.Bus.DR.Get() & 0xFF)))
-}
-
-// SPI on the STM32.
 type SPI struct {
 	Bus *stm32.SPI_Type
 }
@@ -201,26 +161,8 @@ var (
 	SPI0 = SPI1
 )
 
-// SPIConfig is used to store config info for SPI.
-type SPIConfig struct {
-	Frequency uint32
-	SCK       Pin
-	MOSI      Pin
-	MISO      Pin
-	LSBFirst  bool
-	Mode      uint8
-}
-
-// Configure is intended to setup the STM32 SPI1 interface.
-// Features still TODO:
-// - support SPI2 and SPI3
-// - allow setting data size to 16 bits?
-// - allow setting direction in HW for additional optimization?
-// - hardware SS pin?
-func (spi SPI) Configure(config SPIConfig) {
-	// enable clock for SPI
-	stm32.RCC.APB2ENR.SetBits(stm32.RCC_APB2ENR_SPI1EN)
-
+// Set baud rate for SPI
+func (spi SPI) getBaudRate(config SPIConfig) uint32 {
 	var conf uint32
 
 	// set frequency dependent on PCLK2 prescaler (div 1)
@@ -243,82 +185,18 @@ func (spi SPI) Configure(config SPIConfig) {
 	default:
 		conf |= stm32.SPI_BaudRatePrescaler_256
 	}
-
-	// set bit transfer order
-	if config.LSBFirst {
-		conf |= stm32.SPI_FirstBit_LSB
-	}
-
-	// set mode
-	switch config.Mode {
-	case 0:
-		conf &^= (1 << stm32.SPI_CR1_CPOL_Pos)
-		conf &^= (1 << stm32.SPI_CR1_CPHA_Pos)
-	case 1:
-		conf &^= (1 << stm32.SPI_CR1_CPOL_Pos)
-		conf |= (1 << stm32.SPI_CR1_CPHA_Pos)
-	case 2:
-		conf |= (1 << stm32.SPI_CR1_CPOL_Pos)
-		conf &^= (1 << stm32.SPI_CR1_CPHA_Pos)
-	case 3:
-		conf |= (1 << stm32.SPI_CR1_CPOL_Pos)
-		conf |= (1 << stm32.SPI_CR1_CPHA_Pos)
-	default: // to mode 0
-		conf &^= (1 << stm32.SPI_CR1_CPOL_Pos)
-		conf &^= (1 << stm32.SPI_CR1_CPHA_Pos)
-	}
-
-	// set to SPI master
-	conf |= stm32.SPI_Mode_Master
-
-	// now set the configuration
-	spi.Bus.CR1.Set(conf)
-
-	// init pins
-	spi.setPins(config.SCK, config.MOSI, config.MISO)
-
-	// enable SPI interface
-	spi.Bus.CR1.SetBits(stm32.SPI_CR1_SPE)
+	return conf
 }
 
-// Transfer writes/reads a single byte using the SPI interface.
-func (spi SPI) Transfer(w byte) (byte, error) {
-	// Write data to be transmitted to the SPI data register
-	spi.Bus.DR.Set(uint32(w))
-
-	// Wait until transmit complete
-	for !spi.Bus.SR.HasBits(stm32.SPI_SR_TXE) {
-	}
-
-	// Wait until receive complete
-	for !spi.Bus.SR.HasBits(stm32.SPI_SR_RXNE) {
-	}
-
-	// Wait until SPI is not busy
-	for spi.Bus.SR.HasBits(stm32.SPI_SR_BSY) {
-	}
-
-	// Return received data from SPI data register
-	return byte(spi.Bus.DR.Get()), nil
+// Configure SPI pins for input output and clock
+func (spi SPI) configurePins(config SPIConfig) {
+	config.SCK.Configure(PinConfig{Mode: PinOutput50MHz + PinOutputModeAltPushPull})
+	config.MOSI.Configure(PinConfig{Mode: PinOutput50MHz + PinOutputModeAltPushPull})
+	config.MISO.Configure(PinConfig{Mode: PinInputModeFloating})
 }
 
-func (spi SPI) setPins(sck, mosi, miso Pin) {
-	if sck == 0 {
-		sck = SPI0_SCK_PIN
-	}
-	if mosi == 0 {
-		mosi = SPI0_MOSI_PIN
-	}
-	if miso == 0 {
-		miso = SPI0_MISO_PIN
-	}
+//---------- I2C related types and code
 
-	sck.Configure(PinConfig{Mode: PinOutput50MHz + PinOutputModeAltPushPull})
-	mosi.Configure(PinConfig{Mode: PinOutput50MHz + PinOutputModeAltPushPull})
-	miso.Configure(PinConfig{Mode: PinInputModeFloating})
-}
-
-// I2C on the STM32F103xx.
 type I2C struct {
 	Bus *stm32.I2C_Type
 }
@@ -464,7 +342,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR2.HasBits(stm32.I2C_SR2_MSL | stm32.I2C_SR2_BUSY) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read clear address")
+					return errI2CWriteTimeout
 				}
 			}
 
@@ -475,7 +353,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_RxNE) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read 1 byte")
+					return errI2CReadTimeout
 				}
 			}
 
@@ -503,7 +381,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR2.HasBits(stm32.I2C_SR2_MSL | stm32.I2C_SR2_BUSY) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read clear address")
+					return errI2CWriteTimeout
 				}
 			}
 
@@ -515,7 +393,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_BTF) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read 2 bytes")
+					return errI2CReadTimeout
 				}
 			}
 
@@ -549,7 +427,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR2.HasBits(stm32.I2C_SR2_MSL | stm32.I2C_SR2_BUSY) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read clear address")
+					return errI2CWriteTimeout
 				}
 			}
 
@@ -561,8 +439,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_BTF) {
 				timeout--
 				if timeout == 0 {
-					println("I2C timeout on read 3 bytes")
-					return errors.New("I2C timeout on read 3 bytes")
+					return errI2CReadTimeout
 				}
 			}
 
@@ -576,7 +453,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_BTF) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read 3 bytes")
+					return errI2CReadTimeout
 				}
 			}
 
@@ -604,7 +481,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR2.HasBits(stm32.I2C_SR2_MSL | stm32.I2C_SR2_BUSY) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read clear address")
+					return errI2CWriteTimeout
 				}
 			}
 
@@ -617,8 +494,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 				for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_BTF) {
 					timeout--
 					if timeout == 0 {
-						println("I2C timeout on read 3 bytes")
-						return errors.New("I2C timeout on read 3 bytes")
+						return errI2CReadTimeout
 					}
 				}
 
@@ -631,7 +507,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_BTF) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read more than 3 bytes")
+					return errI2CReadTimeout
 				}
 			}
 
@@ -651,7 +527,7 @@ func (i2c I2C) Tx(addr uint16, w, r []byte) error {
 			for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_RxNE) {
 				timeout--
 				if timeout == 0 {
-					return errors.New("I2C timeout on read last byte of more than 3")
+					return errI2CReadTimeout
 				}
 			}
 
@@ -675,7 +551,7 @@ func (i2c I2C) signalStart() error {
 	for i2c.Bus.SR2.HasBits(stm32.I2C_SR2_BUSY) {
 		timeout--
 		if timeout == 0 {
-			return errors.New("I2C busy on start")
+			return errI2CSignalStartTimeout
 		}
 	}
 
@@ -690,7 +566,7 @@ func (i2c I2C) signalStart() error {
 	for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_SB) {
 		timeout--
 		if timeout == 0 {
-			return errors.New("I2C timeout on start")
+			return errI2CSignalStartTimeout
 		}
 	}
 
@@ -713,8 +589,7 @@ func (i2c I2C) waitForStop() error {
 	for i2c.Bus.SR1.HasBits(stm32.I2C_SR1_STOPF) {
 		timeout--
 		if timeout == 0 {
-			println("I2C timeout on wait for stop signal")
-			return errors.New("I2C timeout on wait for stop signal")
+			return errI2CSignalStopTimeout
 		}
 	}
 
@@ -738,7 +613,7 @@ func (i2c I2C) sendAddress(address uint8, write bool) error {
 		for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_ADDR) {
 			timeout--
 			if timeout == 0 {
-				return errors.New("I2C timeout on send write address")
+				return errI2CWriteTimeout
 			}
 		}
 
@@ -746,7 +621,7 @@ func (i2c I2C) sendAddress(address uint8, write bool) error {
 		for !i2c.Bus.SR2.HasBits(stm32.I2C_SR2_MSL | stm32.I2C_SR2_BUSY | stm32.I2C_SR2_TRA) {
 			timeout--
 			if timeout == 0 {
-				return errors.New("I2C timeout on send write address")
+				return errI2CWriteTimeout
 			}
 		}
 	} else {
@@ -754,7 +629,7 @@ func (i2c I2C) sendAddress(address uint8, write bool) error {
 		for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_ADDR) {
 			timeout--
 			if timeout == 0 {
-				return errors.New("I2C timeout on send read address")
+				return errI2CWriteTimeout
 			}
 		}
 	}
@@ -774,7 +649,7 @@ func (i2c I2C) WriteByte(data byte) error {
 	for !i2c.Bus.SR1.HasBits(stm32.I2C_SR1_TxE) {
 		timeout--
 		if timeout == 0 {
-			return errors.New("I2C timeout on write")
+			return errI2CWriteTimeout
 		}
 	}
 

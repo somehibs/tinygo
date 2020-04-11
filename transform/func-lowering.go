@@ -181,29 +181,15 @@ func LowerFuncValues(mod llvm.Module) {
 				// Remove some casts, checks, and the old call which we're going
 				// to replace.
 				for _, callIntPtr := range getUses(getFuncPtrCall) {
-					if !callIntPtr.IsACallInst().IsNil() && callIntPtr.CalledValue().Name() == "runtime.makeGoroutine" {
-						// Special case for runtime.makeGoroutine.
-						for _, inttoptr := range getUses(callIntPtr) {
-							if inttoptr.IsAIntToPtrInst().IsNil() {
-								panic("expected a inttoptr")
-							}
-							for _, use := range getUses(inttoptr) {
-								addFuncLoweringSwitch(mod, builder, funcID, use, func(funcPtr llvm.Value, params []llvm.Value) llvm.Value {
-									// The function lowering switch code passes in a parent handle value.
-									// Set the parent handle to null here because it is irrelevant to goroutine starts.
-									i8ptrType := llvm.PointerType(ctx.Int8Type(), 0)
-									params[len(params)-1] = llvm.ConstPointerNull(i8ptrType)
-									calleeValue := builder.CreatePtrToInt(funcPtr, uintptrType, "")
-									makeGoroutine := mod.NamedFunction("runtime.makeGoroutine")
-									calleeValue = builder.CreateCall(makeGoroutine, []llvm.Value{calleeValue, llvm.Undef(i8ptrType), llvm.ConstNull(i8ptrType)}, "")
-									calleeValue = builder.CreateIntToPtr(calleeValue, funcPtr.Type(), "")
-									builder.CreateCall(calleeValue, params, "")
-									return llvm.Value{} // void so no return value
-								}, functions)
-								use.EraseFromParentAsInstruction()
-							}
-							inttoptr.EraseFromParentAsInstruction()
-						}
+					if !callIntPtr.IsACallInst().IsNil() && callIntPtr.CalledValue().Name() == "internal/task.start" {
+						// Special case for goroutine starts.
+						addFuncLoweringSwitch(mod, builder, funcID, callIntPtr, func(funcPtr llvm.Value, params []llvm.Value) llvm.Value {
+							i8ptrType := llvm.PointerType(ctx.Int8Type(), 0)
+							calleeValue := builder.CreatePtrToInt(funcPtr, uintptrType, "")
+							start := mod.NamedFunction("internal/task.start")
+							builder.CreateCall(start, []llvm.Value{calleeValue, callIntPtr.Operand(1), llvm.Undef(i8ptrType), llvm.ConstNull(i8ptrType)}, "")
+							return llvm.Value{} // void so no return value
+						}, functions)
 						callIntPtr.EraseFromParentAsInstruction()
 						continue
 					}
@@ -211,19 +197,8 @@ func LowerFuncValues(mod llvm.Module) {
 						panic("expected inttoptr")
 					}
 					for _, ptrUse := range getUses(callIntPtr) {
-						if !ptrUse.IsABitCastInst().IsNil() {
-							for _, bitcastUse := range getUses(ptrUse) {
-								if bitcastUse.IsACallInst().IsNil() || bitcastUse.CalledValue().IsAFunction().IsNil() {
-									panic("expected a call instruction")
-								}
-								switch bitcastUse.CalledValue().Name() {
-								case "runtime.isnil":
-									bitcastUse.ReplaceAllUsesWith(llvm.ConstInt(ctx.Int1Type(), 0, false))
-									bitcastUse.EraseFromParentAsInstruction()
-								default:
-									panic("expected a call to runtime.isnil")
-								}
-							}
+						if !ptrUse.IsAICmpInst().IsNil() {
+							ptrUse.ReplaceAllUsesWith(llvm.ConstInt(ctx.Int1Type(), 0, false))
 						} else if !ptrUse.IsACallInst().IsNil() && ptrUse.CalledValue() == callIntPtr {
 							addFuncLoweringSwitch(mod, builder, funcID, ptrUse, func(funcPtr llvm.Value, params []llvm.Value) llvm.Value {
 								return builder.CreateCall(funcPtr, params, "")

@@ -2,7 +2,7 @@ package runtime
 
 // trap is a compiler hint that this function cannot be executed. It is
 // translated into either a trap instruction or a call to abort().
-//go:export llvm.trap
+//export llvm.trap
 func trap()
 
 // Builtin function panic(msg), used as a compiler intrinsic.
@@ -27,14 +27,6 @@ func _recover() interface{} {
 	return nil
 }
 
-// See emitNilCheck in compiler/asserts.go.
-// This function is a dummy function that has its first and only parameter
-// marked 'nocapture' to work around a limitation in LLVM: a regular pointer
-// comparison captures the pointer.
-func isnil(ptr *uint8) bool {
-	return ptr == nil
-}
-
 // Panic when trying to dereference a nil pointer.
 func nilPanic() {
 	runtimePanic("nil pointer dereference")
@@ -48,6 +40,16 @@ func lookupPanic() {
 // Panic when trying to slice a slice out of bounds.
 func slicePanic() {
 	runtimePanic("slice out of range")
+}
+
+// Panic when trying to create a new channel that is too big.
+func chanMakePanic() {
+	runtimePanic("new channel is too big")
+}
+
+// Panic when a shift value is negative.
+func negativeShiftPanic() {
+	runtimePanic("negative shift")
 }
 
 func blockingPanic() {

@@ -23,8 +23,9 @@ import (
 	"github.com/tinygo-org/tinygo/goenv"
 	"github.com/tinygo-org/tinygo/interp"
 	"github.com/tinygo-org/tinygo/loader"
+	"tinygo.org/x/go-llvm"
 
-	serial "go.bug.st/serial.v1"
+	"go.bug.st/serial"
 )
 
 // commandError is an error type to wrap os/exec.Command errors. This provides
@@ -50,6 +51,17 @@ func moveFile(src, dst string) error {
 	}
 	// Failed to move, probably a different filesystem.
 	// Do a copy + remove.
+	err = copyFile(src, dst)
+	if err != nil {
+		return err
+	}
+	return os.Remove(src)
+}
+
+// copyFile copies the given file from src to dst. It copies first to a .tmp
+// file which is then moved over a possibly already existing file at the
+// destination.
+func copyFile(src, dst string) error {
 	inf, err := os.Open(src)
 	if err != nil {
 		return err
@@ -299,7 +311,11 @@ func FlashGDB(pkgName string, ocdOutput bool, options *compileopts.Options) erro
 		case "msd", "command", "":
 			if len(config.Target.Emulator) != 0 {
 				// Assume QEMU as an emulator.
-				gdbInterface = "qemu"
+				if config.Target.Emulator[0] == "mgba" {
+					gdbInterface = "mgba"
+				} else {
+					gdbInterface = "qemu"
+				}
 			} else if openocdInterface != "" && config.Target.OpenOCDTarget != "" {
 				gdbInterface = "openocd"
 			} else if config.Target.JLinkDevice != "" {
@@ -309,6 +325,7 @@ func FlashGDB(pkgName string, ocdOutput bool, options *compileopts.Options) erro
 
 		// Run the GDB server, if necessary.
 		var gdbCommands []string
+		var daemon *exec.Cmd
 		switch gdbInterface {
 		case "native":
 			// Run GDB directly.
@@ -320,7 +337,7 @@ func FlashGDB(pkgName string, ocdOutput bool, options *compileopts.Options) erro
 			if err != nil {
 				return err
 			}
-			daemon := exec.Command("openocd", args...)
+			daemon = exec.Command("openocd", args...)
 			if ocdOutput {
 				// Make it clear which output is from the daemon.
 				w := &ColorWriter{
@@ -331,21 +348,11 @@ func FlashGDB(pkgName string, ocdOutput bool, options *compileopts.Options) erro
 				daemon.Stdout = w
 				daemon.Stderr = w
 			}
-			// Make sure the daemon doesn't receive Ctrl-C that is intended for
-			// GDB (to break the currently executing program).
-			setCommandAsDaemon(daemon)
-			// Start now, and kill it on exit.
-			daemon.Start()
-			defer func() {
-				daemon.Process.Signal(os.Interrupt)
-				// Maybe we should send a .Kill() after x seconds?
-				daemon.Wait()
-			}()
 		case "jlink":
 			gdbCommands = append(gdbCommands, "target remote :2331", "load", "monitor reset halt")
 
 			// We need a separate debugging daemon for on-chip debugging.
-			daemon := exec.Command("JLinkGDBServer", "-device", config.Target.JLinkDevice)
+			daemon = exec.Command("JLinkGDBServer", "-device", config.Target.JLinkDevice)
 			if ocdOutput {
 				// Make it clear which output is from the daemon.
 				w := &ColorWriter{
@@ -356,40 +363,43 @@ func FlashGDB(pkgName string, ocdOutput bool, options *compileopts.Options) erro
 				daemon.Stdout = w
 				daemon.Stderr = w
 			}
-			// Make sure the daemon doesn't receive Ctrl-C that is intended for
-			// GDB (to break the currently executing program).
-			setCommandAsDaemon(daemon)
-			// Start now, and kill it on exit.
-			daemon.Start()
-			defer func() {
-				daemon.Process.Signal(os.Interrupt)
-				// Maybe we should send a .Kill() after x seconds?
-				daemon.Wait()
-			}()
 		case "qemu":
 			gdbCommands = append(gdbCommands, "target remote :1234")
 
 			// Run in an emulator.
 			args := append(config.Target.Emulator[1:], tmppath, "-s", "-S")
-			daemon := exec.Command(config.Target.Emulator[0], args...)
+			daemon = exec.Command(config.Target.Emulator[0], args...)
 			daemon.Stdout = os.Stdout
 			daemon.Stderr = os.Stderr
+		case "mgba":
+			gdbCommands = append(gdbCommands, "target remote :2345")
 
+			// Run in an emulator.
+			args := append(config.Target.Emulator[1:], tmppath, "-g")
+			daemon = exec.Command(config.Target.Emulator[0], args...)
+			daemon.Stdout = os.Stdout
+			daemon.Stderr = os.Stderr
+		case "msd":
+			return errors.New("gdb is not supported for drag-and-drop programmable devices")
+		default:
+			return fmt.Errorf("gdb is not supported with interface %#v", gdbInterface)
+		}
+
+		if daemon != nil {
 			// Make sure the daemon doesn't receive Ctrl-C that is intended for
 			// GDB (to break the currently executing program).
 			setCommandAsDaemon(daemon)
 
 			// Start now, and kill it on exit.
-			daemon.Start()
+			err = daemon.Start()
+			if err != nil {
+				return &commandError{"failed to run", daemon.Path, err}
+			}
 			defer func() {
 				daemon.Process.Signal(os.Interrupt)
 				// Maybe we should send a .Kill() after x seconds?
 				daemon.Wait()
 			}()
-		case "msd":
-			return errors.New("gdb is not supported for drag-and-drop programmable devices")
-		default:
-			return fmt.Errorf("gdb is not supported with interface %#v", gdbInterface)
 		}
 
 		// Ignore Ctrl-C, it must be passed on to GDB.
@@ -642,38 +652,49 @@ func usage() {
 	flag.PrintDefaults()
 }
 
+// printCompilerError prints compiler errors using the provided logger function
+// (similar to fmt.Println).
+//
+// There is one exception: interp errors may print to stderr unconditionally due
+// to limitations in the LLVM bindings.
+func printCompilerError(logln func(...interface{}), err error) {
+	switch err := err.(type) {
+	case types.Error, scanner.Error:
+		logln(err)
+	case *interp.Error:
+		logln("#", err.ImportPath)
+		logln(err.Error())
+		if !err.Inst.IsNil() {
+			err.Inst.Dump()
+			logln()
+		}
+		if len(err.Traceback) > 0 {
+			logln("\ntraceback:")
+			for _, line := range err.Traceback {
+				logln(line.Pos.String() + ":")
+				line.Inst.Dump()
+				logln()
+			}
+		}
+	case loader.Errors:
+		logln("#", err.Pkg.ImportPath)
+		for _, err := range err.Errs {
+			logln(err)
+		}
+	case *builder.MultiError:
+		for _, err := range err.Errs {
+			logln(err)
+		}
+	default:
+		logln("error:", err)
+	}
+}
+
 func handleCompilerError(err error) {
 	if err != nil {
-		switch err := err.(type) {
-		case *interp.Unsupported:
-			// hit an unknown/unsupported instruction
-			fmt.Fprintln(os.Stderr, "#", err.ImportPath)
-			msg := "unsupported instruction during init evaluation:"
-			if err.Pos.String() != "" {
-				msg = err.Pos.String() + " " + msg
-			}
-			fmt.Fprintln(os.Stderr, msg)
-			err.Inst.Dump()
-			fmt.Fprintln(os.Stderr)
-		case types.Error, scanner.Error:
-			fmt.Fprintln(os.Stderr, err)
-		case interp.Error:
-			fmt.Fprintln(os.Stderr, "#", err.ImportPath)
-			for _, err := range err.Errs {
-				fmt.Fprintln(os.Stderr, err)
-			}
-		case loader.Errors:
-			fmt.Fprintln(os.Stderr, "#", err.Pkg.ImportPath)
-			for _, err := range err.Errs {
-				fmt.Fprintln(os.Stderr, err)
-			}
-		case *builder.MultiError:
-			for _, err := range err.Errs {
-				fmt.Fprintln(os.Stderr, err)
-			}
-		default:
-			fmt.Fprintln(os.Stderr, "error:", err)
-		}
+		printCompilerError(func(args ...interface{}) {
+			fmt.Fprintln(os.Stderr, args...)
+		}, err)
 		os.Exit(1)
 	}
 }
@@ -681,7 +702,7 @@ func handleCompilerError(err error) {
 func main() {
 	outpath := flag.String("o", "", "output filename")
 	opt := flag.String("opt", "z", "optimization level: 0, 1, 2, s, z")
-	gc := flag.String("gc", "", "garbage collector to use (none, leaking, conservative)")
+	gc := flag.String("gc", "", "garbage collector to use (none, leaking, extalloc, conservative)")
 	panicStrategy := flag.String("panic", "print", "panic strategy (print, trap)")
 	scheduler := flag.String("scheduler", "", "which scheduler to use (coroutines, tasks)")
 	printIR := flag.Bool("printir", false, "print LLVM IR")
@@ -705,6 +726,18 @@ func main() {
 		os.Exit(1)
 	}
 	command := os.Args[1]
+
+	// Early command processing, before commands are interpreted by the Go flag
+	// library.
+	switch command {
+	case "clang", "ld.lld", "wasm-ld":
+		err := builder.RunTool(command, os.Args[2:]...)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
 
 	flag.CommandLine.Parse(os.Args[2:])
 	options := &compileopts.Options{
@@ -766,7 +799,7 @@ func main() {
 		}
 		err := Build(pkgName, *outpath, options)
 		handleCompilerError(err)
-	case "build-builtins":
+	case "build-library":
 		// Note: this command is only meant to be used while making a release!
 		if *outpath == "" {
 			fmt.Fprintln(os.Stderr, "No output filename supplied (-o).")
@@ -776,10 +809,24 @@ func main() {
 		if *target == "" {
 			fmt.Fprintln(os.Stderr, "No target (-target).")
 		}
-		err := builder.CompileBuiltins(*target, func(path string) error {
-			return moveFile(path, *outpath)
-		})
+		if flag.NArg() != 1 {
+			fmt.Fprintf(os.Stderr, "Build-library only accepts exactly one library name as argument, %d given\n", flag.NArg())
+			usage()
+			os.Exit(1)
+		}
+		var lib *builder.Library
+		switch name := flag.Arg(0); name {
+		case "compiler-rt":
+			lib = &builder.CompilerRT
+		case "picolibc":
+			lib = &builder.Picolibc
+		default:
+			fmt.Fprintf(os.Stderr, "Unknown library: %s\n", name)
+			os.Exit(1)
+		}
+		path, err := lib.Load(*target)
 		handleCompilerError(err)
+		copyFile(path, *outpath)
 	case "flash", "gdb":
 		if *outpath != "" {
 			fmt.Fprintln(os.Stderr, "Output cannot be specified with the flash command.")
@@ -856,7 +903,7 @@ func main() {
 		if s, err := builder.GorootVersionString(goenv.Get("GOROOT")); err == nil {
 			goversion = s
 		}
-		fmt.Printf("tinygo version %s %s/%s (using go version %s)\n", version, runtime.GOOS, runtime.GOARCH, goversion)
+		fmt.Printf("tinygo version %s %s/%s (using go version %s and LLVM version %s)\n", version, runtime.GOOS, runtime.GOARCH, goversion, llvm.Version)
 	case "env":
 		if flag.NArg() == 0 {
 			// Show all environment variables.

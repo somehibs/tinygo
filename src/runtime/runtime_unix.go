@@ -6,30 +6,23 @@ import (
 	"unsafe"
 )
 
-//go:export putchar
+//export putchar
 func _putchar(c int) int
 
-//go:export usleep
+//export usleep
 func usleep(usec uint) int
 
-//go:export malloc
+//export malloc
 func malloc(size uintptr) unsafe.Pointer
 
-//go:export abort
+//export abort
 func abort()
 
-//go:export exit
+//export exit
 func exit(code int)
 
-//go:export clock_gettime
+//export clock_gettime
 func clock_gettime(clk_id int32, ts *timespec)
-
-const heapSize = 1 * 1024 * 1024 // 1MB to start
-
-var (
-	heapStart = uintptr(malloc(heapSize))
-	heapEnd   = heapStart + heapSize
-)
 
 type timeUnit int64
 
@@ -45,14 +38,14 @@ type timespec struct {
 
 const CLOCK_MONOTONIC_RAW = 4
 
-// Entry point for Go. Initialize all packages and call main.main().
-//go:export main
-func main() int {
-	// Run initializers of all packages.
-	initAll()
+func postinit() {}
 
-	// Compiler-generated call to main.main().
-	callMain()
+// Entry point for Go. Initialize all packages and call main.main().
+//export main
+func main() int {
+	preinit()
+
+	run()
 
 	// For libc compatibility.
 	return 0
@@ -85,3 +78,10 @@ func ticks() timeUnit {
 func syscall_Exit(code int) {
 	exit(code)
 }
+
+func extalloc(size uintptr) unsafe.Pointer {
+	return malloc(size)
+}
+
+//export free
+func extfree(ptr unsafe.Pointer)

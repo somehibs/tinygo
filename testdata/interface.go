@@ -26,6 +26,9 @@ func main() {
 	println("Stringer.String():", s.String())
 	var itf interface{} = s
 	println("Stringer.(*Thing).String():", itf.(Stringer).String())
+	if s, ok := s.(interface{ String() string }); ok {
+		println("s has String() method:", s.String())
+	}
 
 	println("nested switch:", nestedSwitch('v', 3))
 
@@ -136,6 +139,12 @@ func printItf(val interface{}) {
 		println("is ?")
 	}
 }
+
+var (
+	// Test for type assert support in the interp package.
+	globalThing interface{} = Foo(3)
+	_                       = globalThing.(Foo)
+)
 
 func nestedSwitch(verb rune, arg interface{}) bool {
 	switch verb {

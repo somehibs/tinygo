@@ -1,6 +1,7 @@
 package interp
 
 import (
+	"errors"
 	"strings"
 
 	"tinygo.org/x/go-llvm"
@@ -40,7 +41,7 @@ type sideEffectResult struct {
 // hasSideEffects scans this function and all descendants, recursively. It
 // returns whether this function has side effects and if it does, which globals
 // it mentions anywhere in this function or any called functions.
-func (e *evalPackage) hasSideEffects(fn llvm.Value) (*sideEffectResult, error) {
+func (e *evalPackage) hasSideEffects(fn llvm.Value) (*sideEffectResult, *Error) {
 	name := fn.Name()
 	switch {
 	case name == "runtime.alloc":
@@ -51,6 +52,8 @@ func (e *evalPackage) hasSideEffects(fn llvm.Value) (*sideEffectResult, error) {
 		return &sideEffectResult{severity: sideEffectNone}, nil
 	case name == "runtime._panic":
 		return &sideEffectResult{severity: sideEffectLimited}, nil
+	case name == "runtime.typeAssert":
+		return &sideEffectResult{severity: sideEffectNone}, nil
 	case name == "runtime.interfaceImplements":
 		return &sideEffectResult{severity: sideEffectNone}, nil
 	case name == "runtime.sliceCopy":
@@ -97,7 +100,7 @@ func (e *evalPackage) hasSideEffects(fn llvm.Value) (*sideEffectResult, error) {
 			switch inst.InstructionOpcode() {
 			case llvm.IndirectBr, llvm.Invoke:
 				// Not emitted by the compiler.
-				return nil, e.errorAt(inst, "unknown instructions")
+				return nil, e.errorAt(inst, errors.New("unknown instructions"))
 			case llvm.Call:
 				child := inst.CalledValue()
 				if !child.IsAInlineAsm().IsNil() {
@@ -118,6 +121,12 @@ func (e *evalPackage) hasSideEffects(fn llvm.Value) (*sideEffectResult, error) {
 				if child.IsDeclaration() {
 					// External function call. Assume only limited side effects
 					// (no affected globals, etc.).
+					switch child.Name() {
+					case "runtime.typeAssert":
+						continue // implemented in interp
+					case "runtime.interfaceImplements":
+						continue // implemented in interp
+					}
 					if e.hasLocalSideEffects(dirtyLocals, inst) {
 						result.updateSeverity(sideEffectLimited)
 					}

@@ -15,11 +15,9 @@ target triple = "wasm32-unknown-unknown-wasm"
 
 declare i32 @runtime.getFuncPtr(i8*, i32, %runtime.typecodeID*, i8*, i8*)
 
-declare i32 @runtime.makeGoroutine(i32, i8*, i8*)
+declare void @"internal/task.start"(i32, i8*, i8*, i8*)
 
 declare void @runtime.nilPanic(i8*, i8*)
-
-declare i1 @runtime.isnil(i8*, i8*, i8*)
 
 declare void @"main$1"(i32, i8*, i8*)
 
@@ -38,9 +36,8 @@ define void @runFunc1(i8*, i32, i8, i8* %context, i8* %parentHandle) {
 entry:
   %3 = call i32 @runtime.getFuncPtr(i8* %0, i32 %1, %runtime.typecodeID* @"reflect/types.type:func:{basic:int8}{}", i8* undef, i8* null)
   %4 = inttoptr i32 %3 to void (i8, i8*, i8*)*
-  %5 = bitcast void (i8, i8*, i8*)* %4 to i8*
-  %6 = call i1 @runtime.isnil(i8* %5, i8* undef, i8* null)
-  br i1 %6, label %fpcall.nil, label %fpcall.next
+  %5 = icmp eq void (i8, i8*, i8*)* %4, null
+  br i1 %5, label %fpcall.nil, label %fpcall.next
 
 fpcall.nil:
   call void @runtime.nilPanic(i8* undef, i8* null)
@@ -58,9 +55,8 @@ define void @runFunc2(i8*, i32, i8, i8* %context, i8* %parentHandle) {
 entry:
   %3 = call i32 @runtime.getFuncPtr(i8* %0, i32 %1, %runtime.typecodeID* @"reflect/types.type:func:{basic:uint8}{}", i8* undef, i8* null)
   %4 = inttoptr i32 %3 to void (i8, i8*, i8*)*
-  %5 = bitcast void (i8, i8*, i8*)* %4 to i8*
-  %6 = call i1 @runtime.isnil(i8* %5, i8* undef, i8* null)
-  br i1 %6, label %fpcall.nil, label %fpcall.next
+  %5 = icmp eq void (i8, i8*, i8*)* %4, null
+  br i1 %5, label %fpcall.nil, label %fpcall.next
 
 fpcall.nil:
   call void @runtime.nilPanic(i8* undef, i8* null)
@@ -71,13 +67,10 @@ fpcall.next:
   ret void
 }
 
-; Special case for runtime.makeGoroutine.
+; Special case for internal/task.start.
 define void @sleepFuncValue(i8*, i32, i8* nocapture readnone %context, i8* nocapture readnone %parentHandle) {
 entry:
   %2 = call i32 @runtime.getFuncPtr(i8* %0, i32 %1, %runtime.typecodeID* @"reflect/types.type:func:{basic:int}{}", i8* undef, i8* null)
-  %3 = call i32 @runtime.makeGoroutine(i32 %2, i8* undef, i8* null)
-  %4 = inttoptr i32 %3 to void (i32, i8*, i8*)*
-  call void %4(i32 8, i8* %0, i8* null)
+  call void @"internal/task.start"(i32 %2, i8* null, i8* undef, i8* null)
   ret void
 }
-

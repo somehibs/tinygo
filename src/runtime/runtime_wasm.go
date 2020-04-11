@@ -18,10 +18,15 @@ type wasiIOVec struct {
 //export fd_write
 func fd_write(id uint32, iovs *wasiIOVec, iovs_len uint, nwritten *uint) (errno uint)
 
+func postinit() {}
+
 //export _start
 func _start() {
-	initAll()
-	callMain()
+	// These need to be initialized early so that the heap can be initialized.
+	heapStart = uintptr(unsafe.Pointer(&heapStartSymbol))
+	heapEnd = uintptr(wasm_memory_size(0) * wasmPageSize)
+
+	run()
 }
 
 // Using global variables to avoid heap allocation.
@@ -48,12 +53,14 @@ func setEventHandler(fn func()) {
 	handleEvent = fn
 }
 
-//go:export resume
+//export resume
 func resume() {
-	handleEvent()
+	go func() {
+		handleEvent()
+	}()
 }
 
-//go:export go_scheduler
+//export go_scheduler
 func go_scheduler() {
 	scheduler()
 }
@@ -62,10 +69,10 @@ const asyncScheduler = true
 
 // This function is called by the scheduler.
 // Schedule a call to runtime.scheduler, do not actually sleep.
-//go:export runtime.sleepTicks
+//export runtime.sleepTicks
 func sleepTicks(d timeUnit)
 
-//go:export runtime.ticks
+//export runtime.ticks
 func ticks() timeUnit
 
 // Abort executes the wasm 'unreachable' instruction.

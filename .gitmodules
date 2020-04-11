@@ -9,7 +9,7 @@
 	url = https://github.com/avr-rust/avr-mcu.git
 [submodule "lib/cmsis-svd"]
 	path = lib/cmsis-svd
-	url = https://github.com/tinygo-org/cmsis-svd
+	url = https://github.com/posborne/cmsis-svd
 [submodule "lib/compiler-rt"]
 	path = lib/compiler-rt
 	url = https://github.com/llvm-mirror/compiler-rt.git
@@ -17,3 +17,6 @@
 [submodule "lib/wasi-libc"]
 	path = lib/wasi-libc
 	url = https://github.com/CraneStation/wasi-libc
+[submodule "lib/picolibc"]
+	path = lib/picolibc
+	url = https://github.com/keith-packard/picolibc.git

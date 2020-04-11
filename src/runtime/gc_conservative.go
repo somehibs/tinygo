@@ -45,6 +45,7 @@ const (
 	bytesPerBlock      = wordsPerBlock * unsafe.Sizeof(heapStart)
 	stateBits          = 2 // how many bits a block state takes (see blockState type)
 	blocksPerStateByte = 8 / stateBits
+	markStackSize      = 4 * unsafe.Sizeof((*int)(nil)) // number of to-be-marked blocks to queue before forcing a rescan
 )
 
 var (
@@ -180,7 +181,7 @@ func (b gcBlock) unmark() {
 // No memory may be allocated before this is called. That means the runtime and
 // any packages the runtime depends upon may not allocate memory during package
 // initialization.
-func init() {
+func initHeap() {
 	totalSize := heapEnd - heapStart
 
 	// Allocate some memory to keep 2 bits of information about every block.
@@ -293,6 +294,7 @@ func GC() {
 	// Mark phase: mark all reachable objects, recursively.
 	markGlobals()
 	markStack()
+	finishMark()
 
 	// Sweep phase: free all non-marked objects and unmark marked objects for
 	// the next collection cycle.
@@ -324,6 +326,96 @@ func markRoots(start, end uintptr) {
 	}
 }
 
+// stackOverflow is a flag which is set when the GC scans too deep while marking.
+// After it is set, all marked allocations must be re-scanned.
+var stackOverflow bool
+
+// startMark starts the marking process on a root and all of its children.
+func startMark(root gcBlock) {
+	var stack [markStackSize]gcBlock
+	stack[0] = root
+	root.setState(blockStateMark)
+	stackLen := 1
+	for stackLen > 0 {
+		// Pop a block off of the stack.
+		stackLen--
+		block := stack[stackLen]
+		if gcDebug {
+			println("stack popped, remaining stack:", stackLen)
+		}
+
+		// Scan all pointers inside the block.
+		start, end := block.address(), block.findNext().address()
+		for addr := start; addr != end; addr += unsafe.Alignof(addr) {
+			// Load the word.
+			word := *(*uintptr)(unsafe.Pointer(addr))
+
+			if !looksLikePointer(word) {
+				// Not a heap pointer.
+				continue
+			}
+
+			// Find the corresponding memory block.
+			referencedBlock := blockFromAddr(word)
+
+			if referencedBlock.state() == blockStateFree {
+				// The to-be-marked object doesn't actually exist.
+				// This is probably a false positive.
+				if gcDebug {
+					println("found reference to free memory:", word, "at:", addr)
+				}
+				continue
+			}
+
+			// Move to the block's head.
+			referencedBlock = referencedBlock.findHead()
+
+			if referencedBlock.state() == blockStateMark {
+				// The block has already been marked by something else.
+				continue
+			}
+
+			// Mark block.
+			if gcDebug {
+				println("marking block:", referencedBlock)
+			}
+			referencedBlock.setState(blockStateMark)
+
+			if stackLen == len(stack) {
+				// The stack is full.
+				// It is necessary to rescan all marked blocks once we are done.
+				stackOverflow = true
+				if gcDebug {
+					println("gc stack overflowed")
+				}
+				continue
+			}
+
+			// Push the pointer onto the stack to be scanned later.
+			stack[stackLen] = referencedBlock
+			stackLen++
+		}
+	}
+}
+
+// finishMark finishes the marking process by processing all stack overflows.
+func finishMark() {
+	for stackOverflow {
+		// Re-mark all blocks.
+		stackOverflow = false
+		for block := gcBlock(0); block < endBlock; block++ {
+			if block.state() != blockStateMark {
+				// Block is not marked, so we do not need to rescan it.
+				continue
+			}
+
+			// Re-mark the block.
+			startMark(block)
+		}
+	}
+}
+
+// mark a GC root at the address addr.
 func markRoot(addr, root uintptr) {
 	if looksLikePointer(root) {
 		block := blockFromAddr(root)
@@ -338,10 +430,7 @@ func markRoot(addr, root uintptr) {
 			if gcDebug {
 				println("found unmarked pointer", root, "at address", addr)
 			}
-			head.setState(blockStateMark)
-			next := block.findNext()
-			// TODO: avoid recursion as much as possible
-			markRoots(head.address(), next.address())
+			startMark(head)
 		}
 	}
 }

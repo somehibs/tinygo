@@ -56,6 +56,11 @@ const (
 	UART_RX_PIN = P0_30 // PORTB
 )
 
+// UART0 is the USB device
+var (
+	UART0 = USB
+)
+
 // I2C pins
 const (
 	SDA_PIN = P0_05 // I2C0 external
@@ -70,4 +75,15 @@ const (
 	SPI0_SCK_PIN  = P0_19 // SCK
 	SPI0_MOSI_PIN = P0_21 // MOSI
 	SPI0_MISO_PIN = P0_23 // MISO
+)
+
+// USB CDC identifiers
+const (
+	usb_STRING_PRODUCT      = "Adafruit Circuit Playground Bluefruit"
+	usb_STRING_MANUFACTURER = "Adafruit"
+)
+
+var (
+	usb_VID uint16 = 0x239A
+	usb_PID uint16 = 0x8045
 )

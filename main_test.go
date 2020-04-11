@@ -6,18 +6,21 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/tinygo-org/tinygo/builder"
 	"github.com/tinygo-org/tinygo/compileopts"
-	"github.com/tinygo-org/tinygo/loader"
+	"github.com/tinygo-org/tinygo/goenv"
 )
 
 const TESTDATA = "testdata"
@@ -55,6 +58,14 @@ func TestCompiler(t *testing.T) {
 		runPlatTests("cortex-m-qemu", matches, t)
 	})
 
+	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+		// Note: running only on Windows and macOS because Linux (as of 2020)
+		// usually has an outdated QEMU version that doesn't support RISC-V yet.
+		t.Run("EmulatedRISCV", func(t *testing.T) {
+			runPlatTests("riscv-qemu", matches, t)
+		})
+	}
+
 	if runtime.GOOS == "linux" {
 		t.Run("ARMLinux", func(t *testing.T) {
 			runPlatTests("arm--linux-gnueabihf", matches, t)
@@ -62,9 +73,20 @@ func TestCompiler(t *testing.T) {
 		t.Run("ARM64Linux", func(t *testing.T) {
 			runPlatTests("aarch64--linux-gnu", matches, t)
 		})
-		t.Run("WebAssembly", func(t *testing.T) {
-			runPlatTests("wasm", matches, t)
-		})
+		goVersion, err := builder.GorootVersionString(goenv.Get("GOROOT"))
+		if err != nil {
+			t.Error("could not get Go version:", err)
+			return
+		}
+		minorVersion := strings.Split(goVersion, ".")[1]
+		if minorVersion != "13" {
+			// WebAssembly tests fail on Go 1.13, so skip them there. Versions
+			// below that are also not supported but still seem to pass, so
+			// include them in the tests for now.
+			t.Run("WebAssembly", func(t *testing.T) {
+				runPlatTests("wasm", matches, t)
+			})
+		}
 	}
 }
 
@@ -131,13 +153,7 @@ func runTest(path, target string, t *testing.T) {
 	binary := filepath.Join(tmpdir, "test")
 	err = runBuild("./"+path, binary, config)
 	if err != nil {
-		if errLoader, ok := err.(loader.Errors); ok {
-			for _, err := range errLoader.Errs {
-				t.Log("failed to build:", err)
-			}
-		} else {
-			t.Log("failed to build:", err)
-		}
+		printCompilerError(t.Log, err)
 		t.Fail()
 		return
 	}
@@ -168,7 +184,7 @@ func runTest(path, target string, t *testing.T) {
 	}
 	go func() {
 		// Terminate the process if it runs too long.
-		timer := time.NewTimer(1 * time.Second)
+		timer := time.NewTimer(10 * time.Second)
 		select {
 		case <-runComplete:
 			timer.Stop()
@@ -216,4 +232,25 @@ func runTest(path, target string, t *testing.T) {
 		}
 		t.Fail()
 	}
+}
+
+// This TestMain is necessary because TinyGo may also be invoked to run certain
+// LLVM tools in a separate process. Not capturing these invocations would lead
+// to recursive tests.
+func TestMain(m *testing.M) {
+	if len(os.Args) >= 2 {
+		switch os.Args[1] {
+		case "clang", "ld.lld", "wasm-ld":
+			// Invoke a specific tool.
+			err := builder.RunTool(os.Args[1], os.Args[2:]...)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(1)
+			}
+			os.Exit(0)
+		}
+	}
+
+	// Run normal tests.
+	os.Exit(m.Run())
 }

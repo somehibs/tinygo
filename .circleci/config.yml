@@ -14,14 +14,14 @@ commands:
       - run:
           name: "Install apt dependencies"
           command: |
-            echo 'deb http://apt.llvm.org/stretch/ llvm-toolchain-stretch<<parameters.llvm>> main' | sudo tee /etc/apt/sources.list.d/llvm.list
+            echo 'deb https://apt.llvm.org/buster/ llvm-toolchain-buster-<<parameters.llvm>> main' | sudo tee /etc/apt/sources.list.d/llvm.list
             wget -O - https://apt.llvm.org/llvm-snapshot.gpg.key|sudo apt-key add -
             sudo apt-get update
             sudo apt-get install \
-                llvm<<parameters.llvm>>-dev \
-                clang<<parameters.llvm>> \
-                libclang<<parameters.llvm>>-dev \
-                lld<<parameters.llvm>> \
+                llvm-<<parameters.llvm>>-dev \
+                clang-<<parameters.llvm>> \
+                libclang-<<parameters.llvm>>-dev \
+                lld-<<parameters.llvm>> \
                 gcc-arm-linux-gnueabihf \
                 gcc-aarch64-linux-gnu \
                 qemu-system-arm \
@@ -41,48 +41,51 @@ commands:
     steps:
       - restore_cache:
           keys:
-            - llvm-source-9-v0
+            - llvm-source-10-v0
       - run:
           name: "Fetch LLVM source"
           command: make llvm-source
       - save_cache:
-          key: llvm-source-9-v0
+          key: llvm-source-10-v0
           paths:
             - llvm-project
   build-wasi-libc:
     steps:
       - restore_cache:
           keys:
-            - wasi-libc-sysroot-v0
+            - wasi-libc-sysroot-v2
       - run:
           name: "Build wasi-libc"
-          command: make wasi-libc CLANG=$PWD/llvm-build/bin/clang LLVM_AR=$PWD/llvm-build/bin/llvm-ar LLVM_NM=$PWD/llvm-build/bin/llvm-nm
+          command: make wasi-libc
       - save_cache:
-          key: wasi-libc-sysroot-v0
+          key: wasi-libc-sysroot-v2
           paths:
             - lib/wasi-libc/sysroot
   test-linux:
+    parameters:
+      llvm:
+        type: string
     steps:
       - checkout
       - submodules
       - apt-dependencies:
-          llvm: "-9"
+          llvm: "<<parameters.llvm>>"
       - install-node
       - restore_cache:
           keys:
             - go-cache-v2-{{ checksum "go.mod" }}-{{ .Environment.CIRCLE_PREVIOUS_BUILD_NUM }}
             - go-cache-v2-{{ checksum "go.mod" }}
       - llvm-source-linux
-      - run: go install .
+      - run: go install -tags=llvm<<parameters.llvm>> .
       - restore_cache:
           keys:
-            - wasi-libc-sysroot-systemclang-v0
+            - wasi-libc-sysroot-systemclang-v1
       - run: make wasi-libc
       - save_cache:
-          key: wasi-libc-sysroot-systemclang-v0
+          key: wasi-libc-sysroot-systemclang-v1
           paths:
             - lib/wasi-libc/sysroot
-      - run: go test -v ./cgo ./compileopts ./interp ./transform .
+      - run: go test -v -tags=llvm<<parameters.llvm>> ./cgo ./compileopts ./interp ./transform .
       - run: make gen-device -j4
       - run: make smoketest
       - save_cache:
@@ -117,7 +120,7 @@ commands:
       - llvm-source-linux
       - restore_cache:
           keys:
-            - llvm-build-9-linux-v0-assert
+            - llvm-build-10-linux-v0-assert
       - run:
           name: "Build LLVM"
           command: |
@@ -135,7 +138,7 @@ commands:
               make ASSERT=1 llvm-build
             fi
       - save_cache:
-          key: llvm-build-9-linux-v0-assert
+          key: llvm-build-10-linux-v0-assert
           paths:
             llvm-build
       - run: make ASSERT=1
@@ -176,7 +179,7 @@ commands:
       - llvm-source-linux
       - restore_cache:
           keys:
-            - llvm-build-9-linux-v0
+            - llvm-build-10-linux-v0
       - run:
           name: "Build LLVM"
           command: |
@@ -194,7 +197,7 @@ commands:
               make llvm-build
             fi
       - save_cache:
-          key: llvm-build-9-linux-v0
+          key: llvm-build-10-linux-v0
           paths:
             llvm-build
       - build-wasi-libc
@@ -229,8 +232,8 @@ commands:
       - run:
           name: "Install dependencies"
           command: |
-            curl https://dl.google.com/go/go1.13.darwin-amd64.tar.gz -o go1.13.darwin-amd64.tar.gz
-            sudo tar -C /usr/local -xzf go1.13.darwin-amd64.tar.gz
+            curl https://dl.google.com/go/go1.14.darwin-amd64.tar.gz -o go1.14.darwin-amd64.tar.gz
+            sudo tar -C /usr/local -xzf go1.14.darwin-amd64.tar.gz
             ln -s /usr/local/go/bin/go /usr/local/bin/go
             HOMEBREW_NO_AUTO_UPDATE=1 brew install qemu
       - restore_cache:
@@ -239,17 +242,17 @@ commands:
             - go-cache-macos-v2-{{ checksum "go.mod" }}
       - restore_cache:
           keys:
-            - llvm-source-9-macos-v0
+            - llvm-source-10-macos-v0
       - run:
           name: "Fetch LLVM source"
           command: make llvm-source
       - save_cache:
-          key: llvm-source-9-macos-v0
+          key: llvm-source-10-macos-v0
           paths:
             - llvm-project
       - restore_cache:
           keys:
-            - llvm-build-9-macos-v0
+            - llvm-build-10-macos-v0
       - run:
           name: "Build LLVM"
           command: |
@@ -261,17 +264,17 @@ commands:
               make llvm-build
             fi
       - save_cache:
-          key: llvm-build-9-macos-v0
+          key: llvm-build-10-macos-v0
           paths:
             llvm-build
       - restore_cache:
           keys:
-            - wasi-libc-sysroot-macos-v0
+            - wasi-libc-sysroot-macos-v1
       - run:
           name: "Build wasi-libc"
-          command: make wasi-libc CLANG=$PWD/llvm-build/bin/clang LLVM_AR=$PWD/llvm-build/bin/llvm-ar LLVM_NM=$PWD/llvm-build/bin/llvm-nm
+          command: make wasi-libc
       - save_cache:
-          key: wasi-libc-sysroot-macos-v0
+          key: wasi-libc-sysroot-macos-v1
           paths:
             - lib/wasi-libc/sysroot
       - run:
@@ -308,27 +311,36 @@ commands:
 jobs:
   test-llvm9-go111:
     docker:
-      - image: circleci/golang:1.11-stretch
+      - image: circleci/golang:1.11-buster
     steps:
-      - test-linux
-  test-llvm9-go112:
+      - test-linux:
+          llvm: "9"
+  test-llvm10-go112:
     docker:
-      - image: circleci/golang:1.12-stretch
+      - image: circleci/golang:1.12-buster
     steps:
-      - test-linux
-  test-llvm9-go113:
+      - test-linux:
+          llvm: "10"
+  test-llvm10-go113:
     docker:
-      - image: circleci/golang:1.13-stretch
+      - image: circleci/golang:1.13-buster
     steps:
-      - test-linux
+      - test-linux:
+          llvm: "10"
+  test-llvm10-go114:
+    docker:
+      - image: circleci/golang:1.14-buster
+    steps:
+      - test-linux:
+          llvm: "10"
   assert-test-linux:
     docker:
-      - image: circleci/golang:1.13-stretch
+      - image: circleci/golang:1.14-stretch
     steps:
       - assert-test-linux
   build-linux:
     docker:
-      - image: circleci/golang:1.13-stretch
+      - image: circleci/golang:1.14-stretch
     steps:
       - build-linux
   build-macos:
@@ -344,8 +356,9 @@ workflows:
   test-all:
     jobs:
       - test-llvm9-go111
-      - test-llvm9-go112
-      - test-llvm9-go113
+      - test-llvm10-go112
+      - test-llvm10-go113
+      - test-llvm10-go114
       - build-linux
       - build-macos
       - assert-test-linux

@@ -4,13 +4,30 @@ all: tinygo
 
 # Default build and source directories, as created by `make llvm-build`.
 LLVM_BUILDDIR ?= llvm-build
-CLANG_SRC ?= llvm-project/clang
-LLD_SRC ?= llvm-project/lld
+LLVM_PROJECTDIR ?= llvm-project
+CLANG_SRC ?= $(LLVM_PROJECTDIR)/clang
+LLD_SRC ?= $(LLVM_PROJECTDIR)/lld
 
-# Default tool selection.
-CLANG ?= clang-9
-LLVM_AR ?= llvm-ar-9
-LLVM_NM ?= llvm-nm-9
+# Try to autodetect LLVM build tools.
+ifneq (, $(shell command -v llvm-build/bin/clang 2> /dev/null))
+    CLANG ?= $(abspath llvm-build/bin/clang)
+else
+    CLANG ?= clang-10
+endif
+ifneq (, $(shell command -v llvm-build/bin/llvm-ar 2> /dev/null))
+    LLVM_AR ?= $(abspath llvm-build/bin/llvm-ar)
+else ifneq (, $(shell command -v llvm-ar-10 2> /dev/null))
+    LLVM_AR ?= llvm-ar-10
+else
+    LLVM_AR ?= llvm-ar
+endif
+ifneq (, $(shell command -v llvm-build/bin/llvm-nm 2> /dev/null))
+    LLVM_NM ?= $(abspath llvm-build/bin/llvm-nm)
+else ifneq (, $(shell command -v llvm-nm-10 2> /dev/null))
+    LLVM_NM ?= llvm-nm-10
+else
+    LLVM_NM ?= llvm-nm
+endif
 
 # Go binary and GOROOT to select
 GO ?= go
@@ -23,7 +40,7 @@ MD5SUM = md5sum
 TINYGO ?= tinygo
 
 # Use CCACHE for LLVM if possible
-ifneq (, $(shell which ccache))
+ifneq (, $(shell command -v ccache 2> /dev/null))
     LLVM_OPTION += '-DLLVM_CCACHE_BUILD=ON'
 endif
 
@@ -36,7 +53,7 @@ endif
 
 .PHONY: all tinygo test $(LLVM_BUILDDIR) llvm-source clean fmt gen-device gen-device-nrf gen-device-avr
 
-LLVM_COMPONENTS = all-targets analysis asmparser asmprinter bitreader bitwriter codegen core coroutines coverage debuginfodwarf executionengine instrumentation interpreter ipo irreader linker lto mc mcjit objcarcopts option profiledata scalaropts support target
+LLVM_COMPONENTS = all-targets analysis asmparser asmprinter bitreader bitwriter codegen core coroutines coverage debuginfodwarf executionengine frontendopenmp instrumentation interpreter ipo irreader linker lto mc mcjit objcarcopts option profiledata scalaropts support target
 
 ifeq ($(OS),Windows_NT)
     EXE = .exe
@@ -86,8 +103,8 @@ LLD_LIBS = $(START_GROUP) -llldCOFF -llldCommon -llldCore -llldDriver -llldELF -
 # For static linking.
 ifneq ("$(wildcard $(LLVM_BUILDDIR)/bin/llvm-config*)","")
     CGO_CPPFLAGS=$(shell $(LLVM_BUILDDIR)/bin/llvm-config --cppflags) -I$(abspath $(LLVM_BUILDDIR))/tools/clang/include -I$(abspath $(CLANG_SRC))/include -I$(abspath $(LLD_SRC))/include
-    CGO_CXXFLAGS=-std=c++11
-    CGO_LDFLAGS+=$(LIBCLANG_PATH) -std=c++11 -L$(abspath $(LLVM_BUILDDIR)/lib) $(CLANG_LIBS) $(LLD_LIBS) $(shell $(LLVM_BUILDDIR)/bin/llvm-config --ldflags --libs --system-libs $(LLVM_COMPONENTS)) -lstdc++ $(CGO_LDFLAGS_EXTRA)
+    CGO_CXXFLAGS=-std=c++14
+    CGO_LDFLAGS+=$(LIBCLANG_PATH) -std=c++14 -L$(abspath $(LLVM_BUILDDIR)/lib) $(CLANG_LIBS) $(LLD_LIBS) $(shell $(LLVM_BUILDDIR)/bin/llvm-config --ldflags --libs --system-libs $(LLVM_COMPONENTS)) -lstdc++ $(CGO_LDFLAGS_EXTRA)
 endif
 
 
@@ -130,14 +147,14 @@ gen-device-stm32: build/gen-device-svd
 
 
 # Get LLVM sources.
-llvm-project/README.md:
-	git clone -b release/9.x https://github.com/llvm/llvm-project
-llvm-source: llvm-project/README.md
+$(LLVM_PROJECTDIR)/README.md:
+	git clone -b release/10.x https://github.com/llvm/llvm-project $(LLVM_PROJECTDIR)
+llvm-source: $(LLVM_PROJECTDIR)/README.md
 
 # Configure LLVM.
 TINYGO_SOURCE_DIR=$(shell pwd)
 $(LLVM_BUILDDIR)/build.ninja: llvm-source
-	mkdir -p $(LLVM_BUILDDIR); cd $(LLVM_BUILDDIR); cmake -G Ninja $(TINYGO_SOURCE_DIR)/llvm-project/llvm "-DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64;RISCV;WebAssembly" "-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=AVR" -DCMAKE_BUILD_TYPE=Release -DLIBCLANG_BUILD_STATIC=ON -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TOOL_CLANG_TOOLS_EXTRA_BUILD=OFF $(LLVM_OPTION)
+	mkdir -p $(LLVM_BUILDDIR); cd $(LLVM_BUILDDIR); cmake -G Ninja $(TINYGO_SOURCE_DIR)/$(LLVM_PROJECTDIR)/llvm "-DLLVM_TARGETS_TO_BUILD=X86;ARM;AArch64;RISCV;WebAssembly" "-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=AVR" -DCMAKE_BUILD_TYPE=Release -DLIBCLANG_BUILD_STATIC=ON -DLLVM_ENABLE_TERMINFO=OFF -DLLVM_ENABLE_ZLIB=OFF -DLLVM_ENABLE_PROJECTS="clang;lld" -DLLVM_TOOL_CLANG_TOOLS_EXTRA_BUILD=OFF $(LLVM_OPTION)
 
 # Build LLVM.
 $(LLVM_BUILDDIR): $(LLVM_BUILDDIR)/build.ninja
@@ -197,6 +214,8 @@ smoketest:
 	# test simulated boards on play.tinygo.org
 	$(TINYGO) build             -o test.wasm -tags=arduino              examples/blinky1
 	@$(MD5SUM) test.wasm
+	$(TINYGO) build             -o test.wasm -tags=hifive1-qemu         examples/serial
+	@$(MD5SUM) test.wasm
 	$(TINYGO) build             -o test.wasm -tags=hifive1b             examples/blinky1
 	@$(MD5SUM) test.wasm
 	$(TINYGO) build             -o test.wasm -tags=reelboard            examples/blinky1
@@ -242,6 +261,8 @@ smoketest:
 	@$(MD5SUM) test.hex
 	$(TINYGO) build -size short -o test.hex -target=circuitplay-express examples/i2s
 	@$(MD5SUM) test.hex
+	$(TINYGO) build -size short -o test.hex -target=clue_alpha          examples/blinky1
+	@$(MD5SUM) test.hex
 	$(TINYGO) build -size short -o test.gba -target=gameboy-advance     examples/gba-display
 	@$(MD5SUM) test.gba
 	$(TINYGO) build -size short -o test.hex -target=itsybitsy-m4        examples/blinky1
@@ -254,6 +275,12 @@ smoketest:
 	@$(MD5SUM) test.hex
 	$(TINYGO) build -size short -o test.hex -target=pyportal            examples/blinky1
 	@$(MD5SUM) test.hex
+	$(TINYGO) build -size short -o test.hex -target=particle-argon      examples/blinky1
+	@$(MD5SUM) test.hex
+	$(TINYGO) build -size short -o test.hex -target=particle-boron      examples/blinky1
+	@$(MD5SUM) test.hex
+	$(TINYGO) build -size short -o test.hex -target=particle-xenon      examples/blinky1
+	@$(MD5SUM) test.hex
 	$(TINYGO) build -size short -o test.hex -target=nucleo-f103rb       examples/blinky1
 	@$(MD5SUM) test.hex
 	$(TINYGO) build -size short -o test.hex -target=pinetime-devkit0    examples/blinky1
@@ -263,7 +290,11 @@ smoketest:
 	$(TINYGO) build -size short -o test.hex -target=pca10056-s140v7     examples/blinky1
 	@$(MD5SUM) test.hex
 ifneq ($(AVR), 0)
+	$(TINYGO) build -size short -o test.hex -target=atmega1284p         examples/serial
+	@$(MD5SUM) test.hex
 	$(TINYGO) build -size short -o test.hex -target=arduino             examples/blinky1
+	@$(MD5SUM) test.hex
+	$(TINYGO) build -size short -o test.hex -target=arduino -scheduler=tasks  examples/blinky1
 	@$(MD5SUM) test.hex
 	$(TINYGO) build -size short -o test.hex -target=arduino-nano        examples/blinky1
 	@$(MD5SUM) test.hex
@@ -283,6 +314,7 @@ release: tinygo gen-device wasi-libc
 	@mkdir -p build/release/tinygo/lib/CMSIS/CMSIS
 	@mkdir -p build/release/tinygo/lib/compiler-rt/lib
 	@mkdir -p build/release/tinygo/lib/nrfx
+	@mkdir -p build/release/tinygo/lib/picolibc/newlib/libc
 	@mkdir -p build/release/tinygo/lib/wasi-libc
 	@mkdir -p build/release/tinygo/pkg/armv6m-none-eabi
 	@mkdir -p build/release/tinygo/pkg/armv7m-none-eabi
@@ -296,10 +328,19 @@ release: tinygo gen-device wasi-libc
 	@cp -rp lib/compiler-rt/LICENSE.TXT  build/release/tinygo/lib/compiler-rt
 	@cp -rp lib/compiler-rt/README.txt   build/release/tinygo/lib/compiler-rt
 	@cp -rp lib/nrfx/*                   build/release/tinygo/lib/nrfx
+	@cp -rp lib/picolibc/newlib/libc/ctype       build/release/tinygo/lib/picolibc/newlib/libc
+	@cp -rp lib/picolibc/newlib/libc/include     build/release/tinygo/lib/picolibc/newlib/libc
+	@cp -rp lib/picolibc/newlib/libc/locale      build/release/tinygo/lib/picolibc/newlib/libc
+	@cp -rp lib/picolibc/newlib/libc/string      build/release/tinygo/lib/picolibc/newlib/libc
+	@cp -rp lib/picolibc/newlib/libc/tinystdio   build/release/tinygo/lib/picolibc/newlib/libc
+	@cp -rp lib/picolibc-include         build/release/tinygo/lib
 	@cp -rp lib/wasi-libc/sysroot        build/release/tinygo/lib/wasi-libc/sysroot
 	@cp -rp src                          build/release/tinygo/src
 	@cp -rp targets                      build/release/tinygo/targets
-	./build/tinygo build-builtins -target=armv6m-none-eabi  -o build/release/tinygo/pkg/armv6m-none-eabi/compiler-rt.a
-	./build/tinygo build-builtins -target=armv7m-none-eabi  -o build/release/tinygo/pkg/armv7m-none-eabi/compiler-rt.a
-	./build/tinygo build-builtins -target=armv7em-none-eabi -o build/release/tinygo/pkg/armv7em-none-eabi/compiler-rt.a
+	./build/tinygo build-library -target=armv6m-none-eabi  -o build/release/tinygo/pkg/armv6m-none-eabi/compiler-rt.a compiler-rt
+	./build/tinygo build-library -target=armv7m-none-eabi  -o build/release/tinygo/pkg/armv7m-none-eabi/compiler-rt.a compiler-rt
+	./build/tinygo build-library -target=armv7em-none-eabi -o build/release/tinygo/pkg/armv7em-none-eabi/compiler-rt.a compiler-rt
+	./build/tinygo build-library -target=armv6m-none-eabi  -o build/release/tinygo/pkg/armv6m-none-eabi/picolibc.a picolibc
+	./build/tinygo build-library -target=armv7m-none-eabi  -o build/release/tinygo/pkg/armv7m-none-eabi/picolibc.a picolibc
+	./build/tinygo build-library -target=armv7em-none-eabi -o build/release/tinygo/pkg/armv7em-none-eabi/picolibc.a picolibc
 	tar -czf build/release.tar.gz -C build/release tinygo

@@ -10,17 +10,8 @@ const Compiler = "tinygo"
 // package.
 func initAll()
 
-// A function call to this function is replaced with one of the following,
-// depending on whether the scheduler is necessary:
-//
-// Without scheduler:
-//
-//     main.main()
-//
-// With scheduler:
-//
-//     main.main()
-//     scheduler()
+// callMain is a placeholder for the program main function.
+// All references to this are replaced with references to the program main function by the compiler.
 func callMain()
 
 func GOMAXPROCS(n int) int {
@@ -39,33 +30,20 @@ func os_runtime_args() []string {
 }
 
 // Copy size bytes from src to dst. The memory areas must not overlap.
-func memcpy(dst, src unsafe.Pointer, size uintptr) {
-	for i := uintptr(0); i < size; i++ {
-		*(*uint8)(unsafe.Pointer(uintptr(dst) + i)) = *(*uint8)(unsafe.Pointer(uintptr(src) + i))
-	}
-}
+// Calls to this function are converted to LLVM intrinsic calls such as
+// llvm.memcpy.p0i8.p0i8.i32(dst, src, size, false).
+func memcpy(dst, src unsafe.Pointer, size uintptr)
 
 // Copy size bytes from src to dst. The memory areas may overlap and will do the
 // correct thing.
-func memmove(dst, src unsafe.Pointer, size uintptr) {
-	if uintptr(dst) < uintptr(src) {
-		// Copy forwards.
-		memcpy(dst, src, size)
-		return
-	}
-	// Copy backwards.
-	for i := size; i != 0; {
-		i--
-		*(*uint8)(unsafe.Pointer(uintptr(dst) + i)) = *(*uint8)(unsafe.Pointer(uintptr(src) + i))
-	}
-}
+// Calls to this function are converted to LLVM intrinsic calls such as
+// llvm.memmove.p0i8.p0i8.i32(dst, src, size, false).
+func memmove(dst, src unsafe.Pointer, size uintptr)
 
 // Set the given number of bytes to zero.
-func memzero(ptr unsafe.Pointer, size uintptr) {
-	for i := uintptr(0); i < size; i++ {
-		*(*byte)(unsafe.Pointer(uintptr(ptr) + i)) = 0
-	}
-}
+// Calls to this function are converted to LLVM intrinsic calls such as
+// llvm.memset.p0i8.i32(ptr, 0, size, false).
+func memzero(ptr unsafe.Pointer, size uintptr)
 
 // Compare two same-size buffers for equality.
 func memequal(x, y unsafe.Pointer, n uintptr) bool {

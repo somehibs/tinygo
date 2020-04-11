@@ -8,19 +8,23 @@ import (
 	"tinygo.org/x/go-llvm"
 )
 
-func (c *Compiler) emitVolatileLoad(frame *Frame, instr *ssa.CallCommon) (llvm.Value, error) {
-	addr := c.getValue(frame, instr.Args[0])
-	c.emitNilCheck(frame, addr, "deref")
-	val := c.builder.CreateLoad(addr, "")
+// createVolatileLoad is the implementation of the intrinsic function
+// runtime/volatile.LoadT().
+func (b *builder) createVolatileLoad(instr *ssa.CallCommon) (llvm.Value, error) {
+	addr := b.getValue(instr.Args[0])
+	b.createNilCheck(instr.Args[0], addr, "deref")
+	val := b.CreateLoad(addr, "")
 	val.SetVolatile(true)
 	return val, nil
 }
 
-func (c *Compiler) emitVolatileStore(frame *Frame, instr *ssa.CallCommon) (llvm.Value, error) {
-	addr := c.getValue(frame, instr.Args[0])
-	val := c.getValue(frame, instr.Args[1])
-	c.emitNilCheck(frame, addr, "deref")
-	store := c.builder.CreateStore(val, addr)
+// createVolatileStore is the implementation of the intrinsic function
+// runtime/volatile.StoreT().
+func (b *builder) createVolatileStore(instr *ssa.CallCommon) (llvm.Value, error) {
+	addr := b.getValue(instr.Args[0])
+	val := b.getValue(instr.Args[1])
+	b.createNilCheck(instr.Args[0], addr, "deref")
+	store := b.CreateStore(val, addr)
 	store.SetVolatile(true)
 	return llvm.Value{}, nil
 }

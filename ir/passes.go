@@ -1,6 +1,7 @@
 package ir
 
 import (
+	"errors"
 	"go/types"
 
 	"golang.org/x/tools/go/ssa"
@@ -58,7 +59,7 @@ func signature(sig *types.Signature) string {
 
 // Simple pass that removes dead code. This pass makes later analysis passes
 // more useful.
-func (p *Program) SimpleDCE() {
+func (p *Program) SimpleDCE() error {
 	// Unmark all functions.
 	for _, f := range p.Functions {
 		f.flag = false
@@ -66,13 +67,21 @@ func (p *Program) SimpleDCE() {
 
 	// Initial set of live functions. Include main.main, *.init and runtime.*
 	// functions.
-	main := p.mainPkg.Members["main"].(*ssa.Function)
+	main, ok := p.mainPkg.Members["main"].(*ssa.Function)
+	if !ok {
+		if p.mainPkg.Members["main"] == nil {
+			return errors.New("function main is undeclared in the main package")
+		} else {
+			return errors.New("cannot declare main - must be func")
+		}
+	}
 	runtimePkg := p.Program.ImportedPackage("runtime")
 	mathPkg := p.Program.ImportedPackage("math")
+	taskPkg := p.Program.ImportedPackage("internal/task")
 	p.GetFunction(main).flag = true
 	worklist := []*ssa.Function{main}
 	for _, f := range p.Functions {
-		if f.exported || f.Synthetic == "package initializer" || f.Pkg == runtimePkg || (f.Pkg == mathPkg && f.Pkg != nil) {
+		if f.exported || f.Synthetic == "package initializer" || f.Pkg == runtimePkg || f.Pkg == taskPkg || (f.Pkg == mathPkg && f.Pkg != nil) {
 			if f.flag {
 				continue
 			}
@@ -135,4 +144,6 @@ func (p *Program) SimpleDCE() {
 		}
 	}
 	p.Functions = livefunctions
+
+	return nil
 }

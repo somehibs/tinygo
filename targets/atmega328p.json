@@ -6,9 +6,13 @@
 	"cflags": [
 		"-mmcu=atmega328p"
 	],
+	"ldflags": [
+		"-mmcu=avr5"
+	],
 	"linkerscript": "src/device/avr/atmega328p.ld",
 	"extra-files": [
 		"targets/avr.S",
 		"src/device/avr/atmega328p.s"
-	]
+	],
+	"emulator": ["simavr", "-m", "atmega328p", "-f", "16000000"]
 }

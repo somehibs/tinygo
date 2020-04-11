@@ -7,6 +7,7 @@
 		"-mmcu=attiny85"
 	],
 	"ldflags": [
+		"-mmcu=avr25",
 		"-Wl,--defsym=_bootloader_size=2180",
 		"-Wl,--defsym=_stack_size=128"
 	],
@@ -15,5 +16,6 @@
 		"targets/avr.S",
 		"src/device/avr/attiny85.s"
 	],
-	"flash-command": "micronucleus --run {hex}"
+	"flash-command": "micronucleus --run {hex}",
+	"emulator": ["simavr", "-m", "attiny85", "-f", "16000000"]
 }

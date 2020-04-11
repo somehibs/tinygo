@@ -17,7 +17,7 @@ type PinMode uint8
 const (
 	PinInput         PinMode = (nrf.GPIO_PIN_CNF_DIR_Input << nrf.GPIO_PIN_CNF_DIR_Pos) | (nrf.GPIO_PIN_CNF_INPUT_Connect << nrf.GPIO_PIN_CNF_INPUT_Pos)
 	PinInputPullup   PinMode = PinInput | (nrf.GPIO_PIN_CNF_PULL_Pullup << nrf.GPIO_PIN_CNF_PULL_Pos)
-	PinInputPulldown PinMode = PinOutput | (nrf.GPIO_PIN_CNF_PULL_Pulldown << nrf.GPIO_PIN_CNF_PULL_Pos)
+	PinInputPulldown PinMode = PinInput | (nrf.GPIO_PIN_CNF_PULL_Pulldown << nrf.GPIO_PIN_CNF_PULL_Pos)
 	PinOutput        PinMode = (nrf.GPIO_PIN_CNF_DIR_Output << nrf.GPIO_PIN_CNF_DIR_Pos) | (nrf.GPIO_PIN_CNF_INPUT_Disconnect << nrf.GPIO_PIN_CNF_INPUT_Pos)
 )
 
@@ -66,8 +66,8 @@ type UART struct {
 
 // UART
 var (
-	// UART0 is the hardware serial port on the NRF.
-	UART0 = UART{Buffer: NewRingBuffer()}
+	// NRF_UART0 is the hardware UART on the NRF SoC.
+	NRF_UART0 = UART{Buffer: NewRingBuffer()}
 )
 
 // Configure the UART.
@@ -79,8 +79,13 @@ func (uart UART) Configure(config UARTConfig) {
 
 	uart.SetBaudRate(config.BaudRate)
 
-	// Set TX and RX pins from board.
-	uart.setPins(UART_TX_PIN, UART_RX_PIN)
+	// Set TX and RX pins
+	if config.TX == 0 && config.RX == 0 {
+		// Use default pins
+		uart.setPins(UART_TX_PIN, UART_RX_PIN)
+	} else {
+		uart.setPins(config.TX, config.RX)
+	}
 
 	nrf.UART0.ENABLE.Set(nrf.UART_ENABLE_ENABLE_Enabled)
 	nrf.UART0.TASKS_STARTTX.Set(1)
@@ -88,7 +93,7 @@ func (uart UART) Configure(config UARTConfig) {
 	nrf.UART0.INTENSET.Set(nrf.UART_INTENSET_RXDRDY_Msk)
 
 	// Enable RX IRQ.
-	intr := interrupt.New(nrf.IRQ_UART0, UART0.handleInterrupt)
+	intr := interrupt.New(nrf.IRQ_UART0, NRF_UART0.handleInterrupt)
 	intr.SetPriority(0xc0) // low priority
 	intr.Enable()
 }

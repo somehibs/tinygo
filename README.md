@@ -43,10 +43,11 @@ See the [getting started instructions](https://tinygo.org/getting-started/) for 
 
 You can compile TinyGo programs for microcontrollers, WebAssembly and Linux.
 
-The following 27 microcontroller boards are currently supported:
+The following 28 microcontroller boards are currently supported:
 
 * [Adafruit Circuit Playground Bluefruit](https://www.adafruit.com/product/4333)
 * [Adafruit Circuit Playground Express](https://www.adafruit.com/product/3333)
+* [Adafruit CLUE Alpha](https://www.adafruit.com/product/4500)
 * [Adafruit Feather M0](https://www.adafruit.com/product/2772)
 * [Adafruit Feather M4](https://www.adafruit.com/product/3857)
 * [Adafruit ItsyBitsy M0](https://www.adafruit.com/product/3727)
@@ -65,6 +66,9 @@ The following 27 microcontroller boards are currently supported:
 * [Nordic Semiconductor PCA10031](https://www.nordicsemi.com/eng/Products/nRF51-Dongle)
 * [Nordic Semiconductor PCA10040](https://www.nordicsemi.com/eng/Products/Bluetooth-low-energy/nRF52-DK)
 * [Nordic Semiconductor PCA10056](https://www.nordicsemi.com/Software-and-Tools/Development-Kits/nRF52840-DK)
+* [Particle Argon](https://docs.particle.io/datasheets/wi-fi/argon-datasheet/)
+* [Particle Boron](https://docs.particle.io/datasheets/cellular/boron-datasheet/)
+* [Particle Xenon](https://docs.particle.io/datasheets/discontinued/xenon-datasheet/)
 * [Phytec reel board](https://www.phytec.eu/product-eu/internet-of-things/reelboard/)
 * [PineTime DevKit](https://www.pine64.org/pinetime/)
 * [SiFIve HiFive1](https://www.sifive.com/boards/hifive1)
@@ -131,4 +135,4 @@ The original reasoning was: if [Python](https://micropython.org/) can run on mic
 
 This project is licensed under the BSD 3-clause license, just like the [Go project](https://golang.org/LICENSE) itself.
 
-Some code has been copied from the LLVM project and is therefore licensed under [a variant of the Apache 2.0 license](http://releases.llvm.org/9.0.0/LICENSE.TXT). This has been clearly indicated in the header of these files.
+Some code has been copied from the LLVM project and is therefore licensed under [a variant of the Apache 2.0 license](http://releases.llvm.org/10.0.0/LICENSE.TXT). This has been clearly indicated in the header of these files.
